@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  compress:
+    cmds:
+      - go run . compress 'data/1234 (5).png' data/1234.gac
+  view:
+    cmds:
+      - go run . view data/1234.gac
+  export:
+    cmds:
+      - go run . export data/1234.gac data/1234.png
+  test:
+    cmds:
+      - task: compress
+      - task: view
+      - task: export
+      
+      
