@@ -1,17 +1,19 @@
 package ascii
 
 import (
-	"compress/zlib"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Magic header bytes for .gac files.
 const Magic = "GASC"
 
-// SaveGAC writes the Art to a file using the custom compressed format.
+// SaveGAC writes the Art to a file using the custom compressed format (RGB colors only, Zstd-compressed).
 func SaveGAC(art *Art, path string) error {
 	file, err := os.Create(path)
 	if err != nil {
@@ -38,20 +40,14 @@ func SaveGAC(art *Art, path string) error {
 		return fmt.Errorf("failed to write original height: %w", err)
 	}
 
-	// Create zlib writer
-	zw := zlib.NewWriter(file)
+	// Create zstd writer
+	zw, err := zstd.NewWriter(file)
+	if err != nil {
+		return fmt.Errorf("failed to create zstd writer: %w", err)
+	}
 	defer zw.Close()
 
-	// Write characters
-	chars := make([]byte, len(art.Cells))
-	for i, cell := range art.Cells {
-		chars[i] = byte(cell.Char)
-	}
-	if _, err := zw.Write(chars); err != nil {
-		return fmt.Errorf("failed to write characters to zlib: %w", err)
-	}
-
-	// Write RGB colors
+	// Write RGB colors (sequential R, G, B values)
 	colors := make([]byte, len(art.Cells)*3)
 	for i, cell := range art.Cells {
 		colors[i*3] = cell.R
@@ -59,13 +55,13 @@ func SaveGAC(art *Art, path string) error {
 		colors[i*3+2] = cell.B
 	}
 	if _, err := zw.Write(colors); err != nil {
-		return fmt.Errorf("failed to write colors to zlib: %w", err)
+		return fmt.Errorf("failed to write colors to zstd: %w", err)
 	}
 
 	return nil
 }
 
-// LoadGAC reads an Art from a .gac file.
+// LoadGAC reads an Art from a .gac file (decompressing RGB colors with Zstd, computing ASCII characters dynamically).
 func LoadGAC(path string) (*Art, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -97,34 +93,45 @@ func LoadGAC(path string) (*Art, error) {
 		return nil, fmt.Errorf("failed to read original height: %w", err)
 	}
 
-	// Create zlib reader
-	zr, err := zlib.NewReader(file)
+	// Create zstd reader
+	zr, err := zstd.NewReader(file)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create zlib reader: %w", err)
+		return nil, fmt.Errorf("failed to create zstd reader: %w", err)
 	}
 	defer zr.Close()
 
 	size := int(width * height)
 
-	// Read characters
-	chars := make([]byte, size)
-	if _, err := io.ReadFull(zr, chars); err != nil {
-		return nil, fmt.Errorf("failed to read characters from zlib: %w", err)
-	}
-
 	// Read RGB colors
 	colors := make([]byte, size*3)
 	if _, err := io.ReadFull(zr, colors); err != nil {
-		return nil, fmt.Errorf("failed to read colors from zlib: %w", err)
+		return nil, fmt.Errorf("failed to read colors from zstd: %w", err)
 	}
 
 	cells := make([]Cell, size)
+	paletteLen := len(Palette)
+
 	for i := 0; i < size; i++ {
+		r := colors[i*3]
+		g := colors[i*3+1]
+		b := colors[i*3+2]
+
+		// Calculate brightness dynamically
+		lum := 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
+
+		// Map brightness to palette character
+		idx := int(math.Round(lum * float64(paletteLen-1) / 255.0))
+		if idx < 0 {
+			idx = 0
+		} else if idx >= paletteLen {
+			idx = paletteLen - 1
+		}
+
 		cells[i] = Cell{
-			Char: rune(chars[i]),
-			R:    colors[i*3],
-			G:    colors[i*3+1],
-			B:    colors[i*3+2],
+			Char: Palette[idx],
+			R:    r,
+			G:    g,
+			B:    b,
 		}
 	}
 

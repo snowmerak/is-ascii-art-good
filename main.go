@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"path/filepath"
@@ -29,15 +30,30 @@ func main() {
 
 		width := 100
 		if len(os.Args) >= 5 {
-			w, err := strconv.Atoi(os.Args[4])
-			if err != nil || w <= 0 {
-				fmt.Printf("Invalid width '%s', using default 100\n", os.Args[4])
+			arg := os.Args[4]
+			if arg == "orig" {
+				width = 0
 			} else {
-				width = w
+				w, err := strconv.Atoi(arg)
+				if err != nil || w <= 0 {
+					fmt.Printf("Invalid width '%s', using default 100\n", arg)
+				} else {
+					width = w
+				}
 			}
 		}
 
-		if err := runCompress(inputPath, outputPath, width); err != nil {
+		aspectRatio := -1.0
+		if len(os.Args) >= 6 {
+			ar, err := strconv.ParseFloat(os.Args[5], 64)
+			if err != nil || ar <= 0.0 {
+				fmt.Printf("Invalid aspect ratio '%s', using auto mode\n", os.Args[5])
+			} else {
+				aspectRatio = ar
+			}
+		}
+
+		if err := runCompress(inputPath, outputPath, width, aspectRatio); err != nil {
 			fmt.Fprintf(os.Stderr, "Compression failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -83,12 +99,12 @@ func main() {
 
 func printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  go run main.go compress <input_image_path> <output_gac_path> [target_width]")
+	fmt.Println("  go run main.go compress <input_image_path> <output_gac_path> [target_width|orig] [char_aspect_ratio]")
 	fmt.Println("  go run main.go view <input_gac_path>")
 	fmt.Println("  go run main.go export <input_gac_path> <output_image_path> [pixel|render]")
 }
 
-func runCompress(inputPath, outputPath string, width int) error {
+func runCompress(inputPath, outputPath string, width int, aspectRatio float64) error {
 	// 1. Get original file size
 	inputInfo, err := os.Stat(inputPath)
 	if err != nil {
@@ -103,13 +119,36 @@ func runCompress(inputPath, outputPath string, width int) error {
 		return err
 	}
 
-	// 3. Resize image
-	fmt.Printf("Resizing to width %d (adjusting aspect ratio)...\n", width)
-	resizedImg := ascii.ResizeBilinear(img, width, 0.5)
+	origW := img.Bounds().Dx()
+	origH := img.Bounds().Dy()
+
+	targetWidth := width
+	if targetWidth <= 0 {
+		targetWidth = origW
+	}
+
+	targetAspectRatio := aspectRatio
+	if targetAspectRatio <= 0.0 {
+		if width <= 0 {
+			targetAspectRatio = 1.0 // 1:1 original mapping
+		} else {
+			targetAspectRatio = 0.5 // optimized for terminal
+		}
+	}
+
+	// 3. Resize image or keep original
+	var resizedImg image.Image
+	if targetWidth == origW && targetAspectRatio == 1.0 {
+		fmt.Println("Keeping original 1:1 resolution (skipping resizing)...")
+		resizedImg = img
+	} else {
+		fmt.Printf("Resizing to width %d (aspect ratio: %.2f)...\n", targetWidth, targetAspectRatio)
+		resizedImg = ascii.ResizeBilinear(img, targetWidth, targetAspectRatio)
+	}
 
 	// 4. Convert to ASCII art representation
 	fmt.Println("Converting to ASCII and extracting colors...")
-	art := ascii.ConvertToASCII(resizedImg, img.Bounds().Dx(), img.Bounds().Dy())
+	art := ascii.ConvertToASCII(resizedImg, origW, origH)
 
 	// 5. Save compressed file
 	fmt.Printf("Compressing and saving to %s...\n", outputPath)
