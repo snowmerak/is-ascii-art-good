@@ -20,9 +20,11 @@ type Cell struct {
 
 // Art represents the complete ASCII art grid.
 type Art struct {
-	Width  int
-	Height int
-	Cells  []Cell
+	Width      int
+	Height     int
+	OrigWidth  int
+	OrigHeight int
+	Cells      []Cell
 }
 
 // Palette is the sequence of characters ordered by brightness/density.
@@ -115,7 +117,7 @@ func interpolate(c00, c10, c01, c11, dx, dy float64) float64 {
 
 // ConvertToASCII converts an image to ASCII art.
 // It assumes the input image has already been resized to target dimensions.
-func ConvertToASCII(img image.Image) *Art {
+func ConvertToASCII(img image.Image, origW, origH int) *Art {
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
@@ -155,8 +157,10 @@ func ConvertToASCII(img image.Image) *Art {
 	}
 
 	return &Art{
-		Width:  width,
-		Height: height,
-		Cells:  cells,
+		Width:      width,
+		Height:     height,
+		OrigWidth:  origW,
+		OrigHeight: origH,
+		Cells:      cells,
 	}
 }

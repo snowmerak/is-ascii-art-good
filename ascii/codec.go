@@ -24,12 +24,18 @@ func SaveGAC(art *Art, path string) error {
 		return fmt.Errorf("failed to write magic: %w", err)
 	}
 
-	// Write width and height
+	// Write width, height, original width, original height
 	if err := binary.Write(file, binary.BigEndian, uint32(art.Width)); err != nil {
 		return fmt.Errorf("failed to write width: %w", err)
 	}
 	if err := binary.Write(file, binary.BigEndian, uint32(art.Height)); err != nil {
 		return fmt.Errorf("failed to write height: %w", err)
+	}
+	if err := binary.Write(file, binary.BigEndian, uint32(art.OrigWidth)); err != nil {
+		return fmt.Errorf("failed to write original width: %w", err)
+	}
+	if err := binary.Write(file, binary.BigEndian, uint32(art.OrigHeight)); err != nil {
+		return fmt.Errorf("failed to write original height: %w", err)
 	}
 
 	// Create zlib writer
@@ -76,13 +82,19 @@ func LoadGAC(path string) (*Art, error) {
 		return nil, fmt.Errorf("invalid file format magic: expected %s, got %s", Magic, string(magic))
 	}
 
-	// Read width and height
-	var width, height uint32
+	// Read width, height, original width, original height
+	var width, height, origWidth, origHeight uint32
 	if err := binary.Read(file, binary.BigEndian, &width); err != nil {
 		return nil, fmt.Errorf("failed to read width: %w", err)
 	}
 	if err := binary.Read(file, binary.BigEndian, &height); err != nil {
 		return nil, fmt.Errorf("failed to read height: %w", err)
+	}
+	if err := binary.Read(file, binary.BigEndian, &origWidth); err != nil {
+		return nil, fmt.Errorf("failed to read original width: %w", err)
+	}
+	if err := binary.Read(file, binary.BigEndian, &origHeight); err != nil {
+		return nil, fmt.Errorf("failed to read original height: %w", err)
 	}
 
 	// Create zlib reader
@@ -117,8 +129,10 @@ func LoadGAC(path string) (*Art, error) {
 	}
 
 	return &Art{
-		Width:  int(width),
-		Height: int(height),
-		Cells:  cells,
+		Width:      int(width),
+		Height:     int(height),
+		OrigWidth:  int(origWidth),
+		OrigHeight: int(origHeight),
+		Cells:      cells,
 	}, nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -108,7 +109,7 @@ func runCompress(inputPath, outputPath string, width int) error {
 
 	// 4. Convert to ASCII art representation
 	fmt.Println("Converting to ASCII and extracting colors...")
-	art := ascii.ConvertToASCII(resizedImg)
+	art := ascii.ConvertToASCII(resizedImg, img.Bounds().Dx(), img.Bounds().Dy())
 
 	// 5. Save compressed file
 	fmt.Printf("Compressing and saving to %s...\n", outputPath)
@@ -170,10 +171,24 @@ func runExport(inputPath, outputPath, mode string) error {
 
 	switch mode {
 	case "pixel":
-		fmt.Printf("Reconstructing pixel image (%dx%d) and saving to %s...\n", art.Width, art.Height, outputPath)
+		targetHeight := art.Height
+		if art.OrigWidth > 0 && art.OrigHeight > 0 {
+			targetHeight = int(math.Round(float64(art.Width) * float64(art.OrigHeight) / float64(art.OrigWidth)))
+			if targetHeight < 1 {
+				targetHeight = 1
+			}
+		}
+		fmt.Printf("Reconstructing pixel image (%dx%d) and saving to %s...\n", art.Width, targetHeight, outputPath)
 		return ascii.ExportPixel(art, outputPath)
 	case "render":
-		fmt.Printf("Rendering ASCII glyph image (%dx%d) and saving to %s...\n", art.Width*8, art.Height*8, outputPath)
+		targetHeight := art.Height * 8
+		if art.OrigWidth > 0 && art.OrigHeight > 0 {
+			targetHeight = int(math.Round(float64(art.Width*8) * float64(art.OrigHeight) / float64(art.OrigWidth)))
+			if targetHeight < 8 {
+				targetHeight = 8
+			}
+		}
+		fmt.Printf("Rendering ASCII glyph image (%dx%d) and saving to %s...\n", art.Width*8, targetHeight, outputPath)
 		return ascii.ExportRender(art, outputPath)
 	default:
 		return fmt.Errorf("unknown export mode '%s'; use 'pixel' or 'render'", mode)
