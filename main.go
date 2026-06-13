@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"image"
+	"image/color"
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -90,6 +92,86 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "compress-video":
+		if len(os.Args) < 5 {
+			fmt.Println("Error: missing arguments for 'compress-video'")
+			printVideoUsage()
+			os.Exit(1)
+		}
+		framesDir := os.Args[2]
+		outputPath := os.Args[3]
+		fps, err := strconv.Atoi(os.Args[4])
+		if err != nil || fps <= 0 {
+			fmt.Printf("Invalid FPS '%s', using 30\n", os.Args[4])
+			fps = 30
+		}
+
+		width := 100
+		if len(os.Args) >= 6 {
+			arg := os.Args[5]
+			if arg == "orig" {
+				width = 0
+			} else {
+				w, err := strconv.Atoi(arg)
+				if err == nil && w > 0 {
+					width = w
+				}
+			}
+		}
+
+		if err := ascii.CompressVideo(framesDir, outputPath, width, fps); err != nil {
+			fmt.Fprintf(os.Stderr, "Video compression failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Video compression complete!")
+
+	case "play-video":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: missing argument for 'play-video'")
+			printVideoUsage()
+			os.Exit(1)
+		}
+		inputPath := os.Args[2]
+		if err := ascii.PlayVideo(inputPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Playback failed: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "export-video":
+		if len(os.Args) < 4 {
+			fmt.Println("Error: missing arguments for 'export-video'")
+			printVideoUsage()
+			os.Exit(1)
+		}
+		inputPath := os.Args[2]
+		outputDir := os.Args[3]
+		mode := "pixel"
+		if len(os.Args) >= 5 {
+			mode = os.Args[4]
+		}
+		if err := ascii.ExportVideo(inputPath, outputDir, mode); err != nil {
+			fmt.Fprintf(os.Stderr, "Video export failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Video export complete!")
+
+	case "generate-test-frames":
+		if len(os.Args) < 4 {
+			fmt.Println("Error: missing arguments for 'generate-test-frames'")
+			printVideoUsage()
+			os.Exit(1)
+		}
+		outputDir := os.Args[2]
+		count, err := strconv.Atoi(os.Args[3])
+		if err != nil || count <= 0 {
+			count = 60
+		}
+		if err := generateTestFrames(outputDir, count); err != nil {
+			fmt.Fprintf(os.Stderr, "Test frame generation failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Generated %d test frames in %s\n", count, outputDir)
+
 	default:
 		fmt.Printf("Error: unknown command '%s'\n", command)
 		printUsage()
@@ -104,15 +186,22 @@ func printUsage() {
 	fmt.Println("  go run main.go export <input_gac_path> <output_image_path> [pixel|render]")
 }
 
+func printVideoUsage() {
+	printUsage()
+	fmt.Println("\nVideo Extensions:")
+	fmt.Println("  go run main.go generate-test-frames <output_dir> <frame_count>")
+	fmt.Println("  go run main.go compress-video <frames_dir> <output_gav_path> <fps> [target_width|orig]")
+	fmt.Println("  go run main.go play-video <input_gav_path>")
+	fmt.Println("  go run main.go export-video <input_gav_path> <output_dir> [pixel|render]")
+}
+
 func runCompress(inputPath, outputPath string, width int, aspectRatio float64) error {
-	// 1. Get original file size
 	inputInfo, err := os.Stat(inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to check input file: %w", err)
 	}
 	origSize := inputInfo.Size()
 
-	// 2. Load image
 	fmt.Printf("Loading %s...\n", filepath.Base(inputPath))
 	img, err := ascii.LoadImage(inputPath)
 	if err != nil {
@@ -130,13 +219,12 @@ func runCompress(inputPath, outputPath string, width int, aspectRatio float64) e
 	targetAspectRatio := aspectRatio
 	if targetAspectRatio <= 0.0 {
 		if width <= 0 {
-			targetAspectRatio = 1.0 // 1:1 original mapping
+			targetAspectRatio = 1.0
 		} else {
-			targetAspectRatio = 0.5 // optimized for terminal
+			targetAspectRatio = 0.5
 		}
 	}
 
-	// 3. Resize image or keep original
 	var resizedImg image.Image
 	if targetWidth == origW && targetAspectRatio == 1.0 {
 		fmt.Println("Keeping original 1:1 resolution (skipping resizing)...")
@@ -146,17 +234,14 @@ func runCompress(inputPath, outputPath string, width int, aspectRatio float64) e
 		resizedImg = ascii.ResizeBilinear(img, targetWidth, targetAspectRatio)
 	}
 
-	// 4. Convert to ASCII art representation
 	fmt.Println("Converting to ASCII and extracting colors...")
 	art := ascii.ConvertToASCII(resizedImg, origW, origH)
 
-	// 5. Save compressed file
 	fmt.Printf("Compressing and saving to %s...\n", outputPath)
 	if err := ascii.SaveGAC(art, outputPath); err != nil {
 		return err
 	}
 
-	// 6. Get compressed file size
 	outputInfo, err := os.Stat(outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to check output file: %w", err)
@@ -232,4 +317,68 @@ func runExport(inputPath, outputPath, mode string) error {
 	default:
 		return fmt.Errorf("unknown export mode '%s'; use 'pixel' or 'render'", mode)
 	}
+}
+
+func generateTestFrames(outputDir string, count int) error {
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return err
+	}
+	width, height := 320, 240
+	radius := 30.0
+
+	for i := 0; i < count; i++ {
+		t := float64(i) * 0.1
+		x := float64(width)/2.0 + float64(width)/3.0*math.Cos(t)
+		y := float64(height)/2.0 + float64(height)/3.0*math.Abs(math.Sin(t*1.5)) - 20.0
+
+		img := image.NewRGBA(image.Rect(0, 0, width, height))
+
+		for py := 0; py < height; py++ {
+			for px := 0; px < width; px++ {
+				img.SetRGBA(px, py, color.RGBA{
+					R: uint8(10),
+					G: uint8(20 + py*30/height),
+					B: uint8(60 + px*40/width),
+					A: 255,
+				})
+			}
+		}
+
+		for py := 0; py < height; py++ {
+			for px := 0; px < width; px++ {
+				dx := float64(px) - x
+				dy := float64(py) - y
+				dist := math.Sqrt(dx*dx + dy*dy)
+				if dist < radius {
+					alpha := 1.0
+					if dist > radius-2.0 {
+						alpha = (radius - dist) / 2.0
+					}
+					r := uint8(255 * alpha)
+					g := uint8(200 * alpha)
+					b := uint8(50 * alpha)
+
+					bg := img.RGBAAt(px, py)
+					img.SetRGBA(px, py, color.RGBA{
+						R: uint8(float64(r)*alpha + float64(bg.R)*(1.0-alpha)),
+						G: uint8(float64(g)*alpha + float64(bg.G)*(1.0-alpha)),
+						B: uint8(float64(b)*alpha + float64(bg.B)*(1.0-alpha)),
+						A: 255,
+					})
+				}
+			}
+		}
+
+		outPath := filepath.Join(outputDir, fmt.Sprintf("frame_%04d.png", i))
+		f, err := os.Create(outPath)
+		if err != nil {
+			return err
+		}
+		if err := png.Encode(f, img); err != nil {
+			f.Close()
+			return err
+		}
+		f.Close()
+	}
+	return nil
 }

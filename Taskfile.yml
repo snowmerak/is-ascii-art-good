@@ -6,12 +6,12 @@ tasks:
   compress:
     desc: Compress image to GAC with default terminal width (100)
     cmds:
-      - go run . compress 'data/144356289_p0_master1200.jpg' data/image.gac 100
+      - go run . compress 'data/145930353_p0_master1200.jpg' data/image.gac 100
 
   compress-highres:
     desc: Compress image to GAC preserving original 1:1 resolution
     cmds:
-      - go run . compress 'data/144356289_p0_master1200.jpg' data/image_highres.gac orig
+      - go run . compress 'data/145930353_p0_master1200.jpg' data/image_highres.gac orig
 
   view:
     desc: View compressed GAC file in terminal with ANSI colors
