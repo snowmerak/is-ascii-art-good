@@ -197,16 +197,21 @@ func SaveGAC(art *Art, path string, colorScale int) error {
 }
 
 // LoadGAC reads an Art from a .gac file, decompressing and upscaling color channels.
+// LoadGAC reads an Art from a .gac file, decompressing and upscaling color channels.
 func LoadGAC(path string) (*Art, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
+	return DecodeGAC(file)
+}
 
+// DecodeGAC reads an Art from a reader containing .gac data.
+func DecodeGAC(r io.Reader) (*Art, error) {
 	// Read magic
 	magic := make([]byte, 4)
-	if _, err := io.ReadFull(file, magic); err != nil {
+	if _, err := io.ReadFull(r, magic); err != nil {
 		return nil, fmt.Errorf("failed to read magic: %w", err)
 	}
 	if string(magic) != Magic {
@@ -217,13 +222,13 @@ func LoadGAC(path string) (*Art, error) {
 	var width, height, origWidth, origHeight, paletteSize, colorWidth, colorHeight uint32
 	headerFields := []*uint32{&width, &height, &origWidth, &origHeight, &paletteSize, &colorWidth, &colorHeight}
 	for _, ptr := range headerFields {
-		if err := binary.Read(file, binary.BigEndian, ptr); err != nil {
+		if err := binary.Read(r, binary.BigEndian, ptr); err != nil {
 			return nil, fmt.Errorf("failed to read header field: %w", err)
 		}
 	}
 
 	// Create zstd reader
-	zr, err := zstd.NewReader(file)
+	zr, err := zstd.NewReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create zstd reader: %w", err)
 	}

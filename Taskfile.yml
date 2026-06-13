@@ -3,52 +3,89 @@
 version: '3'
 
 tasks:
-  compress:
-    desc: Compress image to GAC with default terminal width (100)
+  build:
+    desc: Build the local CLI executable
     cmds:
-      - go run . compress 'data/145930353_p0_master1200.jpg' data/image.gac 100
+      - go build -o ascii_art.exe .
 
-  compress-highres:
-    desc: Compress image to GAC preserving original 1:1 resolution
+  build-wasm:
+    desc: Compile Go decoder to WebAssembly and extract wasm_exec.js
     cmds:
-      - go run . compress 'data/145930353_p0_master1200.jpg' data/image_highres.gac orig
+      - cmd: go build -o data/main.wasm .
+        env:
+          GOOS: js
+          GOARCH: wasm
+      - powershell -Command "Copy-Item (Join-Path (go env GOROOT) 'lib/wasm/wasm_exec.js') -Destination 'data/wasm_exec.js' -Force"
 
-  view:
-    desc: View compressed GAC file in terminal with ANSI colors
+  compress-image-2x:
+    desc: Compress image to GAC with 2x downscaled colors (100 width)
     cmds:
-      - go run . view data/image.gac
+      - go run . compress-image 'data/144356289_p0_master1200.jpg' data/image.gac 100 0.5 2
 
-  export-pixel:
-    desc: Reconstruct GAC back to low-resolution PNG preserving aspect ratio
+  compress-image-1x:
+    desc: Compress image to GAC preserving original resolution and 1x colors
     cmds:
-      - go run . export data/image.gac data/image_pixel.png pixel
+      - go run . compress-image 'data/144356289_p0_master1200.jpg' data/image_highres.gac orig 1.0 1
 
-  export-render:
-    desc: Reconstruct GAC to high-resolution ASCII glyph PNG preserving aspect ratio
+  view-image:
+    desc: View compressed GAC image in terminal
     cmds:
-      - go run . export data/image.gac data/image_render.png render
+      - go run . view-image data/image.gac
 
-  export-highres-pixel:
-    desc: Reconstruct high-resolution GAC back to pixel PNG at original size
+  export-image-2x-pixel:
+    desc: Export 2x compressed image back to pixel PNG
     cmds:
-      - go run . export data/image_highres.gac data/image_highres_pixel.png pixel
+      - go run . export-image data/image.gac data/image_pixel.png pixel
 
-  export-highres-render:
-    desc: Reconstruct high-resolution GAC to massive ASCII glyph PNG
+  export-image-2x-render:
+    desc: Export 2x compressed image to rendered ASCII glyph PNG
     cmds:
-      - go run . export data/image_highres.gac data/image_highres_render.png render
+      - go run . export-image data/image.gac data/image_render.png render
+
+  export-image-1x-pixel:
+    desc: Export 1x compressed image back to original pixel PNG
+    cmds:
+      - go run . export-image data/image_highres.gac data/image_highres_pixel.png pixel
+
+  export-image-1x-render:
+    desc: Export 1x compressed image to massive ASCII glyph PNG
+    cmds:
+      - go run . export-image data/image_highres.gac data/image_highres_render.png render
+
+  test-image:
+    desc: Run all image compression, viewing, and export tests
+    cmds:
+      - task: compress-image-2x
+      - task: view-image
+      - task: export-image-2x-pixel
+      - task: export-image-2x-render
+      - task: compress-image-1x
+      - task: export-image-1x-pixel
+      - task: export-image-1x-render
+
+  test-video:
+    desc: Run all video generation, compression, and export tests
+    cmds:
+      - go run . generate-test-frames data/test_frames 60
+      - go run . compress-video data/test_frames data/test.gav 30 100 1
+      - go run . export-video data/test.gav data/reconstructed_frames pixel
+      - powershell -Command "Remove-Item -Path data/test_frames -Recurse -Force; Remove-Item -Path data/reconstructed_frames -Recurse -Force"
 
   test:
-    desc: Run standard compression, terminal view, and pixel/render exports
+    desc: Run both image and video test pipelines
     cmds:
-      - task: compress
-      - task: view
-      - task: export-pixel
-      - task: export-render
+      - task: test-image
+      - task: test-video
 
-  test-highres:
-    desc: Run high-resolution compression and exports
+  clean:
+    desc: Clean build artifacts and temporary files
     cmds:
-      - task: compress-highres
-      - task: export-highres-pixel
-      - task: export-highres-render
+      - powershell -Command "if (Test-Path ascii_art.exe) { Remove-Item ascii_art.exe -Force }"
+      - powershell -Command "if (Test-Path is-ascii-art-good.exe) { Remove-Item is-ascii-art-good.exe -Force }"
+      - powershell -Command "if (Test-Path data/main.wasm) { Remove-Item data/main.wasm -Force }"
+      - powershell -Command "if (Test-Path data/wasm_exec.js) { Remove-Item data/wasm_exec.js -Force }"
+      - powershell -Command "if (Test-Path data/image.gac) { Remove-Item data/image.gac -Force }"
+      - powershell -Command "if (Test-Path data/image_highres.gac) { Remove-Item data/image_highres.gac -Force }"
+      - powershell -Command "if (Test-Path data/test.gav) { Remove-Item data/test.gav -Force }"
+      - powershell -Command "if (Test-Path data/test_frames) { Remove-Item data/test_frames -Recurse -Force }"
+      - powershell -Command "if (Test-Path data/reconstructed_frames) { Remove-Item data/reconstructed_frames -Recurse -Force }"

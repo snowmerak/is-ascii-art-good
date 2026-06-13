@@ -1,3 +1,5 @@
+//go:build !js || !wasm
+
 package main
 
 import (
@@ -21,9 +23,9 @@ func main() {
 
 	command := os.Args[1]
 	switch command {
-	case "compress":
+	case "compress-image":
 		if len(os.Args) < 4 {
-			fmt.Println("Error: missing arguments for 'compress'")
+			fmt.Println("Error: missing arguments for 'compress-image'")
 			printUsage()
 			os.Exit(1)
 		}
@@ -68,9 +70,9 @@ func main() {
 			os.Exit(1)
 		}
 
-	case "view":
+	case "view-image":
 		if len(os.Args) < 3 {
-			fmt.Println("Error: missing argument for 'view'")
+			fmt.Println("Error: missing argument for 'view-image'")
 			printUsage()
 			os.Exit(1)
 		}
@@ -81,9 +83,9 @@ func main() {
 			os.Exit(1)
 		}
 
-	case "export":
+	case "export-image":
 		if len(os.Args) < 4 {
-			fmt.Println("Error: missing arguments for 'export'")
+			fmt.Println("Error: missing arguments for 'export-image'")
 			printUsage()
 			os.Exit(1)
 		}
@@ -197,18 +199,18 @@ func main() {
 
 func printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  go run main.go compress <input_image_path> <output_gac_path> [target_width|orig] [char_aspect_ratio] [color_scale]")
-	fmt.Println("  go run main.go view <input_gac_path>")
-	fmt.Println("  go run main.go export <input_gac_path> <output_image_path> [pixel|render]")
+	fmt.Println("  go run main.go compress-image <input_path> <output_path> [width] [aspect_ratio] [color_scale]")
+	fmt.Println("  go run main.go view-image <input_path>")
+	fmt.Println("  go run main.go export-image <input_path> <output_path> [mode]")
 }
 
 func printVideoUsage() {
 	printUsage()
 	fmt.Println("\nVideo Extensions:")
-	fmt.Println("  go run main.go generate-test-frames <output_dir> <frame_count>")
-	fmt.Println("  go run main.go compress-video <frames_dir> <output_gav_path> <fps> [target_width|orig] [color_scale]")
-	fmt.Println("  go run main.go play-video <input_gav_path>")
-	fmt.Println("  go run main.go export-video <input_gav_path> <output_dir> [pixel|render]")
+	fmt.Println("  go run main.go generate-test-frames <output_dir> [count]")
+	fmt.Println("  go run main.go compress-video <input_dir> <output_path> <fps> [width] [color_scale]")
+	fmt.Println("  go run main.go play-video <input_path>")
+	fmt.Println("  go run main.go export-video <input_path> <output_dir> [mode]")
 }
 
 func runCompress(inputPath, outputPath string, width int, aspectRatio float64, colorScale int) error {
