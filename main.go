@@ -55,7 +55,15 @@ func main() {
 			}
 		}
 
-		if err := runCompress(inputPath, outputPath, width, aspectRatio); err != nil {
+		colorScale := 1
+		if len(os.Args) >= 7 {
+			cs, err := strconv.Atoi(os.Args[6])
+			if err == nil && cs > 0 {
+				colorScale = cs
+			}
+		}
+
+		if err := runCompress(inputPath, outputPath, width, aspectRatio, colorScale); err != nil {
 			fmt.Fprintf(os.Stderr, "Compression failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -119,7 +127,15 @@ func main() {
 			}
 		}
 
-		if err := ascii.CompressVideo(framesDir, outputPath, width, fps); err != nil {
+		colorScale := 1
+		if len(os.Args) >= 7 {
+			cs, err := strconv.Atoi(os.Args[6])
+			if err == nil && cs > 0 {
+				colorScale = cs
+			}
+		}
+
+		if err := ascii.CompressVideo(framesDir, outputPath, width, fps, colorScale); err != nil {
 			fmt.Fprintf(os.Stderr, "Video compression failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -181,7 +197,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  go run main.go compress <input_image_path> <output_gac_path> [target_width|orig] [char_aspect_ratio]")
+	fmt.Println("  go run main.go compress <input_image_path> <output_gac_path> [target_width|orig] [char_aspect_ratio] [color_scale]")
 	fmt.Println("  go run main.go view <input_gac_path>")
 	fmt.Println("  go run main.go export <input_gac_path> <output_image_path> [pixel|render]")
 }
@@ -190,12 +206,12 @@ func printVideoUsage() {
 	printUsage()
 	fmt.Println("\nVideo Extensions:")
 	fmt.Println("  go run main.go generate-test-frames <output_dir> <frame_count>")
-	fmt.Println("  go run main.go compress-video <frames_dir> <output_gav_path> <fps> [target_width|orig]")
+	fmt.Println("  go run main.go compress-video <frames_dir> <output_gav_path> <fps> [target_width|orig] [color_scale]")
 	fmt.Println("  go run main.go play-video <input_gav_path>")
 	fmt.Println("  go run main.go export-video <input_gav_path> <output_dir> [pixel|render]")
 }
 
-func runCompress(inputPath, outputPath string, width int, aspectRatio float64) error {
+func runCompress(inputPath, outputPath string, width int, aspectRatio float64, colorScale int) error {
 	inputInfo, err := os.Stat(inputPath)
 	if err != nil {
 		return fmt.Errorf("failed to check input file: %w", err)
@@ -238,7 +254,7 @@ func runCompress(inputPath, outputPath string, width int, aspectRatio float64) e
 	art := ascii.ConvertToASCII(resizedImg, origW, origH)
 
 	fmt.Printf("Compressing and saving to %s...\n", outputPath)
-	if err := ascii.SaveGAC(art, outputPath); err != nil {
+	if err := ascii.SaveGAC(art, outputPath, colorScale); err != nil {
 		return err
 	}
 

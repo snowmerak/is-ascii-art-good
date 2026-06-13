@@ -400,7 +400,7 @@ func PlayVideo(path string) error {
 }
 
 // CompressVideo reads images from a directory, compresses them into .gav format.
-func CompressVideo(framesDir, outputPath string, targetWidth int, fps int) error {
+func CompressVideo(framesDir, outputPath string, targetWidth int, fps int, colorScale int) error {
 	entries, err := os.ReadDir(framesDir)
 	if err != nil {
 		return fmt.Errorf("failed to read frames directory: %w", err)
@@ -451,11 +451,15 @@ func CompressVideo(framesDir, outputPath string, targetWidth int, fps int) error
 	width := uint32(resizedFirst.Bounds().Dx())
 	height := uint32(resizedFirst.Bounds().Dy())
 
-	colorWidth := width / 2
+	if colorScale < 1 {
+		colorScale = 1
+	}
+
+	colorWidth := width / uint32(colorScale)
 	if colorWidth < 1 {
 		colorWidth = 1
 	}
-	colorHeight := height / 2
+	colorHeight := height / uint32(colorScale)
 	if colorHeight < 1 {
 		colorHeight = 1
 	}

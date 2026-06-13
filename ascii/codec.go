@@ -14,8 +14,8 @@ import (
 // Magic header bytes for .gac files.
 const Magic = "GASC"
 
-// SaveGAC writes the Art using hybrid resolution (high-res 4-bit characters + 2x downscaled 8-bit colors + Zstd).
-func SaveGAC(art *Art, path string) error {
+// SaveGAC writes the Art using hybrid resolution (high-res 4-bit characters + configurable downscaled 8-bit colors + Zstd).
+func SaveGAC(art *Art, path string, colorScale int) error {
 	file, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
@@ -25,12 +25,16 @@ func SaveGAC(art *Art, path string) error {
 	width := art.Width
 	height := art.Height
 
-	// 1. Calculate color grid dimensions (2x downscaled)
-	colorWidth := width / 2
+	if colorScale < 1 {
+		colorScale = 1
+	}
+
+	// 1. Calculate color grid dimensions
+	colorWidth := width / colorScale
 	if colorWidth < 1 {
 		colorWidth = 1
 	}
-	colorHeight := height / 2
+	colorHeight := height / colorScale
 	if colorHeight < 1 {
 		colorHeight = 1
 	}
