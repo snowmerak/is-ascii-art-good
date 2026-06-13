@@ -14,7 +14,7 @@ import (
 // Magic header bytes for .gac files.
 const Magic = "GASC"
 
-// SaveGAC writes the Art to a file using 256-color palette quantization, RLE, and Zstd compression.
+// SaveGAC writes the Art using hybrid resolution (high-res 4-bit characters + 2x downscaled 8-bit colors + Zstd).
 func SaveGAC(art *Art, path string) error {
 	file, err := os.Create(path)
 	if err != nil {
@@ -22,30 +22,84 @@ func SaveGAC(art *Art, path string) error {
 	}
 	defer file.Close()
 
-	// 1. Run color quantization (with Floyd-Steinberg dithering)
-	palette, indices := Quantize(art)
+	width := art.Width
+	height := art.Height
+
+	// 1. Calculate color grid dimensions (2x downscaled)
+	colorWidth := width / 2
+	if colorWidth < 1 {
+		colorWidth = 1
+	}
+	colorHeight := height / 2
+	if colorHeight < 1 {
+		colorHeight = 1
+	}
+
+	// 2. Average colors in each block (box filter)
+	colorGrid := make([]color.RGBA, colorWidth*colorHeight)
+	for cy := 0; cy < colorHeight; cy++ {
+		for cx := 0; cx < colorWidth; cx++ {
+			xStart := cx * width / colorWidth
+			xEnd := (cx + 1) * width / colorWidth
+			yStart := cy * height / colorHeight
+			yEnd := (cy + 1) * height / colorHeight
+
+			var sumR, sumG, sumB int
+			count := 0
+			for y := yStart; y < yEnd; y++ {
+				for x := xStart; x < xEnd; x++ {
+					cell := art.Cells[y*width+x]
+					sumR += int(cell.R)
+					sumG += int(cell.G)
+					sumB += int(cell.B)
+					count++
+				}
+			}
+			if count > 0 {
+				colorGrid[cy*colorWidth+cx] = color.RGBA{
+					R: uint8(sumR / count),
+					G: uint8(sumG / count),
+					B: uint8(sumB / count),
+					A: 255,
+				}
+			}
+		}
+	}
+
+	// 3. Run 256-color popularity quantization on the low-res color grid
+	palette, colorIndices := QuantizeColors(colorGrid)
 	paletteSize := len(palette)
+
+	// 4. Pack high-res characters to 4-bit indices (density range 0-9)
+	packedChars := make([]byte, (width*height+1)/2)
+	for i := 0; i < width*height; i += 2 {
+		val1 := getPaletteIndex(art.Cells[i].Char)
+		var val2 byte = 0
+		if i+1 < width*height {
+			val2 = getPaletteIndex(art.Cells[i+1].Char)
+		}
+		packedChars[i/2] = (val1 << 4) | (val2 & 0x0F)
+	}
 
 	// Write magic
 	if _, err := file.WriteString(Magic); err != nil {
 		return fmt.Errorf("failed to write magic: %w", err)
 	}
 
-	// Write width, height, original width, original height, and palette size (24-byte header)
-	if err := binary.Write(file, binary.BigEndian, uint32(art.Width)); err != nil {
-		return fmt.Errorf("failed to write width: %w", err)
+	// Write width, height, original width, original height, palette size, color width, color height (32-byte header)
+	headerFields := []uint32{
+		uint32(width),
+		uint32(height),
+		uint32(art.OrigWidth),
+		uint32(art.OrigHeight),
+		uint32(paletteSize),
+		uint32(colorWidth),
+		uint32(colorHeight),
 	}
-	if err := binary.Write(file, binary.BigEndian, uint32(art.Height)); err != nil {
-		return fmt.Errorf("failed to write height: %w", err)
-	}
-	if err := binary.Write(file, binary.BigEndian, uint32(art.OrigWidth)); err != nil {
-		return fmt.Errorf("failed to write original width: %w", err)
-	}
-	if err := binary.Write(file, binary.BigEndian, uint32(art.OrigHeight)); err != nil {
-		return fmt.Errorf("failed to write original height: %w", err)
-	}
-	if err := binary.Write(file, binary.BigEndian, uint32(paletteSize)); err != nil {
-		return fmt.Errorf("failed to write palette size: %w", err)
+	for _, val := range headerFields {
+		if err := binary.Write(file, binary.BigEndian, val); err != nil {
+			return fmt.Errorf("failed to write header field: %w", err)
+		}
 	}
 
 	// Create zstd writer
@@ -66,18 +120,23 @@ func SaveGAC(art *Art, path string) error {
 		return fmt.Errorf("failed to write palette to zstd: %w", err)
 	}
 
-	// 2. RLE encode index grid
-	rleIndices := EncodeRLE(indices)
+	// Write packed character grid
+	if _, err := zw.Write(packedChars); err != nil {
+		return fmt.Errorf("failed to write packed characters to zstd: %w", err)
+	}
 
-	// Write RLE indices
-	if _, err := zw.Write(rleIndices); err != nil {
-		return fmt.Errorf("failed to write RLE indices to zstd: %w", err)
+	// 5. RLE compress low-res color indices
+	rleColorIndices := EncodeRLE(colorIndices)
+
+	// Write RLE color indices
+	if _, err := zw.Write(rleColorIndices); err != nil {
+		return fmt.Errorf("failed to write RLE color indices to zstd: %w", err)
 	}
 
 	return nil
 }
 
-// LoadGAC reads an Art from a .gac file, decompressing the palette and index grid.
+// LoadGAC reads an Art from a .gac file, decompressing and upscaling color channels.
 func LoadGAC(path string) (*Art, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -94,22 +153,13 @@ func LoadGAC(path string) (*Art, error) {
 		return nil, fmt.Errorf("invalid file format magic: expected %s, got %s", Magic, string(magic))
 	}
 
-	// Read width, height, original width, original height, and palette size
-	var width, height, origWidth, origHeight, paletteSize uint32
-	if err := binary.Read(file, binary.BigEndian, &width); err != nil {
-		return nil, fmt.Errorf("failed to read width: %w", err)
-	}
-	if err := binary.Read(file, binary.BigEndian, &height); err != nil {
-		return nil, fmt.Errorf("failed to read height: %w", err)
-	}
-	if err := binary.Read(file, binary.BigEndian, &origWidth); err != nil {
-		return nil, fmt.Errorf("failed to read original width: %w", err)
-	}
-	if err := binary.Read(file, binary.BigEndian, &origHeight); err != nil {
-		return nil, fmt.Errorf("failed to read original height: %w", err)
-	}
-	if err := binary.Read(file, binary.BigEndian, &paletteSize); err != nil {
-		return nil, fmt.Errorf("failed to read palette size: %w", err)
+	// Read header fields (32-byte header total with magic)
+	var width, height, origWidth, origHeight, paletteSize, colorWidth, colorHeight uint32
+	headerFields := []*uint32{&width, &height, &origWidth, &origHeight, &paletteSize, &colorWidth, &colorHeight}
+	for _, ptr := range headerFields {
+		if err := binary.Read(file, binary.BigEndian, ptr); err != nil {
+			return nil, fmt.Errorf("failed to read header field: %w", err)
+		}
 	}
 
 	// Create zstd reader
@@ -134,50 +184,90 @@ func LoadGAC(path string) (*Art, error) {
 		}
 	}
 
-	// Read RLE indices (remaining stream data)
-	rleIndices, err := io.ReadAll(zr)
+	// Read packed character grid
+	packedCharSize := (int(width*height) + 1) / 2
+	packedChars := make([]byte, packedCharSize)
+	if _, err := io.ReadFull(zr, packedChars); err != nil {
+		return nil, fmt.Errorf("failed to read packed characters from zstd: %w", err)
+	}
+
+	// Unpack packed character grid
+	charIndices := make([]byte, width*height)
+	for i := 0; i < packedCharSize; i++ {
+		b := packedChars[i]
+		if i*2 < int(width*height) {
+			charIndices[i*2] = b >> 4
+		}
+		if i*2+1 < int(width*height) {
+			charIndices[i*2+1] = b & 0x0F
+		}
+	}
+
+	// Read RLE compressed color indices (remaining stream data)
+	rleColorIndices, err := io.ReadAll(zr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read RLE data from zstd: %w", err)
+		return nil, fmt.Errorf("failed to read RLE color indices from zstd: %w", err)
 	}
 
 	// Decode RLE
-	indices, err := DecodeRLE(rleIndices)
+	colorIndices, err := DecodeRLE(rleColorIndices)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode RLE indices: %w", err)
+		return nil, fmt.Errorf("failed to decode RLE color indices: %w", err)
 	}
 
+	expectedColorSize := int(colorWidth * colorHeight)
+	if len(colorIndices) != expectedColorSize {
+		return nil, fmt.Errorf("color grid size mismatch: expected %d, got %d", expectedColorSize, len(colorIndices))
+	}
+
+	// Reconstruct cells by upscaling color channels using 2D bilinear interpolation
 	gridSize := int(width * height)
-	if len(indices) != gridSize {
-		return nil, fmt.Errorf("RLE decoded size mismatch: expected %d, got %d", gridSize, len(indices))
-	}
-
-	// Reconstruct cells
 	cells := make([]Cell, gridSize)
 	paletteLen := len(Palette)
 
-	for i := 0; i < gridSize; i++ {
-		idx := indices[i]
-		if int(idx) >= len(palette) {
-			return nil, fmt.Errorf("index out of palette bounds: got %d, palette size %d", idx, len(palette))
-		}
-		c := palette[idx]
+	for y := 0; y < int(height); y++ {
+		for x := 0; x < int(width); x++ {
+			charIdx := charIndices[y*int(width)+x]
+			if int(charIdx) >= paletteLen {
+				charIdx = 0
+			}
+			char := Palette[charIdx]
 
-		// Calculate brightness dynamically
-		lum := 0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)
+			// Calculate low-res source coordinates
+			srcX := float64(x) * float64(colorWidth) / float64(width)
+			srcY := float64(y) * float64(colorHeight) / float64(height)
 
-		// Map brightness to palette character
-		charIdx := int(math.Round(lum * float64(paletteLen-1) / 255.0))
-		if charIdx < 0 {
-			charIdx = 0
-		} else if charIdx >= paletteLen {
-			charIdx = paletteLen - 1
-		}
+			x0 := int(math.Floor(srcX))
+			y0 := int(math.Floor(srcY))
+			x1 := x0 + 1
+			y1 := y0 + 1
 
-		cells[i] = Cell{
-			Char: Palette[charIdx],
-			R:    c.R,
-			G:    c.G,
-			B:    c.B,
+			if x1 >= int(colorWidth) {
+				x1 = int(colorWidth) - 1
+			}
+			if y1 >= int(colorHeight) {
+				y1 = int(colorHeight) - 1
+			}
+
+			dx := srcX - float64(x0)
+			dy := srcY - float64(y0)
+
+			c00 := palette[colorIndices[y0*int(colorWidth)+x0]]
+			c10 := palette[colorIndices[y0*int(colorWidth)+x1]]
+			c01 := palette[colorIndices[y1*int(colorWidth)+x0]]
+			c11 := palette[colorIndices[y1*int(colorWidth)+x1]]
+
+			// Interpolate RGB color channels
+			r := uint8(math.Round(interpolateColors(float64(c00.R), float64(c10.R), float64(c01.R), float64(c11.R), dx, dy)))
+			g := uint8(math.Round(interpolateColors(float64(c00.G), float64(c10.G), float64(c01.G), float64(c11.G), dx, dy)))
+			b := uint8(math.Round(interpolateColors(float64(c00.B), float64(c10.B), float64(c01.B), float64(c11.B), dx, dy)))
+
+			cells[y*int(width)+x] = Cell{
+				Char: char,
+				R:    r,
+				G:    g,
+				B:    b,
+			}
 		}
 	}
 
@@ -188,4 +278,17 @@ func LoadGAC(path string) (*Art, error) {
 		OrigHeight: int(origHeight),
 		Cells:      cells,
 	}, nil
+}
+
+func getPaletteIndex(char rune) byte {
+	for i, r := range Palette {
+		if r == char {
+			return byte(i)
+		}
+	}
+	return 0
+}
+
+func interpolateColors(c00, c10, c01, c11, dx, dy float64) float64 {
+	return (1-dx)*(1-dy)*c00 + dx*(1-dy)*c10 + (1-dx)*dy*c01 + dx*dy*c11
 }
