@@ -190,6 +190,71 @@ func main() {
 		}
 		fmt.Printf("Generated %d test frames in %s\n", count, outputDir)
 
+	case "stream-test-pipe":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: missing directory argument")
+			os.Exit(1)
+		}
+		dir := os.Args[2]
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read directory: %v\n", err)
+			os.Exit(1)
+		}
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+			path := filepath.Join(dir, file.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to read file %s: %v\n", path, err)
+				os.Exit(1)
+			}
+			if _, err := os.Stdout.Write(data); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to write to stdout: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+	case "stream-encode-video":
+		width := 100
+		if len(os.Args) >= 3 {
+			arg := os.Args[2]
+			if arg == "orig" {
+				width = 0
+			} else {
+				w, err := strconv.Atoi(arg)
+				if err == nil && w > 0 {
+					width = w
+				}
+			}
+		}
+		fps := 30
+		if len(os.Args) >= 4 {
+			f, err := strconv.Atoi(os.Args[3])
+			if err == nil && f > 0 {
+				fps = f
+			}
+		}
+		colorScale := 1
+		if len(os.Args) >= 5 {
+			cs, err := strconv.Atoi(os.Args[4])
+			if err == nil && cs > 0 {
+				colorScale = cs
+			}
+		}
+		if err := ascii.StreamEncodeVideo(os.Stdin, os.Stdout, width, fps, colorScale); err != nil {
+			fmt.Fprintf(os.Stderr, "Stream encoding failed: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "stream-decode-video":
+		if err := ascii.StreamDecodeVideo(os.Stdin); err != nil {
+			fmt.Fprintf(os.Stderr, "Stream decoding failed: %v\n", err)
+			os.Exit(1)
+		}
+
 	default:
 		fmt.Printf("Error: unknown command '%s'\n", command)
 		printUsage()
@@ -211,6 +276,8 @@ func printVideoUsage() {
 	fmt.Println("  go run main.go compress-video <input_dir> <output_path> <fps> [width] [color_scale]")
 	fmt.Println("  go run main.go play-video <input_path>")
 	fmt.Println("  go run main.go export-video <input_path> <output_dir> [mode]")
+	fmt.Println("  go run main.go stream-encode-video [width] [fps] [color_scale]")
+	fmt.Println("  go run main.go stream-decode-video")
 }
 
 func runCompress(inputPath, outputPath string, width int, aspectRatio float64, colorScale int) error {

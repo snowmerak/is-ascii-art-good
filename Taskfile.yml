@@ -77,11 +77,22 @@ tasks:
       - cmd: rm -rf data/test_frames data/reconstructed_frames
         platforms: [linux, darwin]
 
+  test-stream:
+    desc: Run mock streaming video pipeline test
+    cmds:
+      - go run . generate-test-frames data/test_frames 60
+      - go run . stream-test-pipe data/test_frames | go run . stream-encode-video 100 30 1 | go run . stream-decode-video
+      - cmd: powershell -Command "Remove-Item -Path data/test_frames -Recurse -Force"
+        platforms: [windows]
+      - cmd: rm -rf data/test_frames
+        platforms: [linux, darwin]
+
   test:
-    desc: Run both image and video test pipelines
+    desc: Run all image, video, and streaming test pipelines
     cmds:
       - task: test-image
       - task: test-video
+      - task: test-stream
 
   clean:
     desc: Clean build artifacts and temporary files
