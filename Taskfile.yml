@@ -15,7 +15,10 @@ tasks:
         env:
           GOOS: js
           GOARCH: wasm
-      - powershell -Command "Copy-Item (Join-Path (go env GOROOT) 'lib/wasm/wasm_exec.js') -Destination 'data/wasm_exec.js' -Force"
+      - cmd: powershell -Command "Copy-Item (Join-Path (go env GOROOT) 'lib/wasm/wasm_exec.js') -Destination 'data/wasm_exec.js' -Force"
+        platforms: [windows]
+      - cmd: cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" data/wasm_exec.js
+        platforms: [linux, darwin]
 
   compress-image-2x:
     desc: Compress image to GAC with 2x downscaled colors (100 width)
@@ -69,7 +72,10 @@ tasks:
       - go run . generate-test-frames data/test_frames 60
       - go run . compress-video data/test_frames data/test.gav 30 100 1
       - go run . export-video data/test.gav data/reconstructed_frames pixel
-      - powershell -Command "Remove-Item -Path data/test_frames -Recurse -Force; Remove-Item -Path data/reconstructed_frames -Recurse -Force"
+      - cmd: powershell -Command "Remove-Item -Path data/test_frames -Recurse -Force; Remove-Item -Path data/reconstructed_frames -Recurse -Force"
+        platforms: [windows]
+      - cmd: rm -rf data/test_frames data/reconstructed_frames
+        platforms: [linux, darwin]
 
   test:
     desc: Run both image and video test pipelines
@@ -80,12 +86,27 @@ tasks:
   clean:
     desc: Clean build artifacts and temporary files
     cmds:
-      - powershell -Command "if (Test-Path ascii_art.exe) { Remove-Item ascii_art.exe -Force }"
-      - powershell -Command "if (Test-Path is-ascii-art-good.exe) { Remove-Item is-ascii-art-good.exe -Force }"
-      - powershell -Command "if (Test-Path data/main.wasm) { Remove-Item data/main.wasm -Force }"
-      - powershell -Command "if (Test-Path data/wasm_exec.js) { Remove-Item data/wasm_exec.js -Force }"
-      - powershell -Command "if (Test-Path data/image.gac) { Remove-Item data/image.gac -Force }"
-      - powershell -Command "if (Test-Path data/image_highres.gac) { Remove-Item data/image_highres.gac -Force }"
-      - powershell -Command "if (Test-Path data/test.gav) { Remove-Item data/test.gav -Force }"
-      - powershell -Command "if (Test-Path data/test_frames) { Remove-Item data/test_frames -Recurse -Force }"
-      - powershell -Command "if (Test-Path data/reconstructed_frames) { Remove-Item data/reconstructed_frames -Recurse -Force }"
+      # Windows Cleanup
+      - cmd: powershell -Command "if (Test-Path ascii_art.exe) { Remove-Item ascii_art.exe -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path is-ascii-art-good.exe) { Remove-Item is-ascii-art-good.exe -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path data/main.wasm) { Remove-Item data/main.wasm -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path data/wasm_exec.js) { Remove-Item data/wasm_exec.js -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path data/image.gac) { Remove-Item data/image.gac -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path data/image_highres.gac) { Remove-Item data/image_highres.gac -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path data/test.gav) { Remove-Item data/test.gav -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path data/test_frames) { Remove-Item data/test_frames -Recurse -Force }"
+        platforms: [windows]
+      - cmd: powershell -Command "if (Test-Path data/reconstructed_frames) { Remove-Item data/reconstructed_frames -Recurse -Force }"
+        platforms: [windows]
+      # POSIX Cleanup
+      - cmd: rm -f ascii_art.exe is-ascii-art-good.exe data/main.wasm data/wasm_exec.js data/image.gac data/image_highres.gac data/test.gav
+        platforms: [linux, darwin]
+      - cmd: rm -rf data/test_frames data/reconstructed_frames
+        platforms: [linux, darwin]
