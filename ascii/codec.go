@@ -70,15 +70,66 @@ func SaveGAC(art *Art, path string) error {
 	palette, colorIndices := QuantizeColors(colorGrid)
 	paletteSize := len(palette)
 
-	// 4. Pack high-res characters to 4-bit indices (density range 0-9)
+	// 4. Extract character grid and pack high-res characters to 4-bit indices (density range 0-9)
+	charGrid := make([]byte, width*height)
+	for i := 0; i < width*height; i++ {
+		charGrid[i] = getPaletteIndex(art.Cells[i].Char)
+	}
+
 	packedChars := make([]byte, (width*height+1)/2)
 	for i := 0; i < width*height; i += 2 {
-		val1 := getPaletteIndex(art.Cells[i].Char)
+		val1 := charGrid[i]
 		var val2 byte = 0
 		if i+1 < width*height {
-			val2 = getPaletteIndex(art.Cells[i+1].Char)
+			val2 = charGrid[i+1]
 		}
 		packedChars[i/2] = (val1 << 4) | (val2 & 0x0F)
+	}
+
+	// 5. Compute edge flags for each 2x2 color block
+	edgeFlagsSize := (colorWidth*colorHeight + 3) / 4
+	packedEdgeFlags := make([]byte, edgeFlagsSize)
+
+	for cy := 0; cy < colorHeight; cy++ {
+		for cx := 0; cx < colorWidth; cx++ {
+			xStart := cx * width / colorWidth
+			xEnd := (cx + 1) * width / colorWidth
+			yStart := cy * height / colorHeight
+			yEnd := (cy + 1) * height / colorHeight
+
+			var d00, d10, d01, d11 byte
+			d00 = charGrid[yStart*width+xStart]
+
+			xRight := xEnd - 1
+			if xRight < xStart {
+				xRight = xStart
+			}
+			yBottom := yEnd - 1
+			if yBottom < yStart {
+				yBottom = yStart
+			}
+
+			d10 = charGrid[yStart*width+xRight]
+			d01 = charGrid[yBottom*width+xStart]
+			d11 = charGrid[yBottom*width+xRight]
+
+			dh := absDiff(d00, d10) + absDiff(d01, d11)
+			dv := absDiff(d00, d01) + absDiff(d10, d11)
+
+			var flag byte = 0
+			if dh > 2 || dv > 2 {
+				if dh > dv {
+					flag = 1 // Vertical edge
+				} else if dv > dh {
+					flag = 2 // Horizontal edge
+				} else {
+					flag = 3 // Diagonal / complex edge
+				}
+			}
+
+			idx := cy*colorWidth + cx
+			packedEdgeFlags[idx/4] |= (flag & 0x03) << ((idx % 4) * 2)
+		}
 	}
 
 	// Write magic
@@ -125,7 +176,12 @@ func SaveGAC(art *Art, path string) error {
 		return fmt.Errorf("failed to write packed characters to zstd: %w", err)
 	}
 
-	// 5. RLE compress low-res color indices
+	// Write packed edge flags
+	if _, err := zw.Write(packedEdgeFlags); err != nil {
+		return fmt.Errorf("failed to write packed edge flags to zstd: %w", err)
+	}
+
+	// 6. RLE compress low-res color indices
 	rleColorIndices := EncodeRLE(colorIndices)
 
 	// Write RLE color indices
@@ -203,6 +259,19 @@ func LoadGAC(path string) (*Art, error) {
 		}
 	}
 
+	// Read packed edge flags
+	edgeFlagsSize := (int(colorWidth*colorHeight) + 3) / 4
+	packedEdgeFlags := make([]byte, edgeFlagsSize)
+	if _, err := io.ReadFull(zr, packedEdgeFlags); err != nil {
+		return nil, fmt.Errorf("failed to read packed edge flags from zstd: %w", err)
+	}
+
+	// Unpack edge flags
+	edgeFlags := make([]byte, colorWidth*colorHeight)
+	for i := 0; i < int(colorWidth*colorHeight); i++ {
+		edgeFlags[i] = (packedEdgeFlags[i/4] >> ((i % 4) * 2)) & 0x03
+	}
+
 	// Read RLE compressed color indices (remaining stream data)
 	rleColorIndices, err := io.ReadAll(zr)
 	if err != nil {
@@ -233,9 +302,15 @@ func LoadGAC(path string) (*Art, error) {
 			}
 			char := Palette[charIdx]
 
-			// Calculate low-res source coordinates
-			srcX := float64(x) * float64(colorWidth) / float64(width)
-			srcY := float64(y) * float64(colorHeight) / float64(height)
+			// Calculate low-res source coordinates (grid aligned)
+			srcX := 0.0
+			if width > 1 {
+				srcX = float64(x) * float64(colorWidth-1) / float64(width-1)
+			}
+			srcY := 0.0
+			if height > 1 {
+				srcY = float64(y) * float64(colorHeight-1) / float64(height-1)
+			}
 
 			x0 := int(math.Floor(srcX))
 			y0 := int(math.Floor(srcY))
@@ -257,10 +332,82 @@ func LoadGAC(path string) (*Art, error) {
 			c01 := palette[colorIndices[y1*int(colorWidth)+x0]]
 			c11 := palette[colorIndices[y1*int(colorWidth)+x1]]
 
-			// Interpolate RGB color channels
-			r := uint8(math.Round(interpolateColors(float64(c00.R), float64(c10.R), float64(c01.R), float64(c11.R), dx, dy)))
-			g := uint8(math.Round(interpolateColors(float64(c00.G), float64(c10.G), float64(c01.G), float64(c11.G), dx, dy)))
-			b := uint8(math.Round(interpolateColors(float64(c00.B), float64(c10.B), float64(c01.B), float64(c11.B), dx, dy)))
+			// Helper to get neighbor's char index
+			getNeighCharIdx := func(lx, ly int) byte {
+				hx := lx * int(width) / int(colorWidth)
+				hy := ly * int(height) / int(colorHeight)
+				if hx >= int(width) {
+					hx = int(width) - 1
+				}
+				if hy >= int(height) {
+					hy = int(height) - 1
+				}
+				return charIndices[hy*int(width)+hx]
+			}
+
+			// Helper to get similarity weight
+			getSimWeight := func(neighCharIdx byte) float64 {
+				diff := int(charIdx) - int(neighCharIdx)
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff > 2 {
+					return 0.05
+				}
+				return 1.0
+			}
+
+			w00 := (1.0 - dx) * (1.0 - dy) * getSimWeight(getNeighCharIdx(x0, y0))
+			w10 := dx * (1.0 - dy) * getSimWeight(getNeighCharIdx(x1, y0))
+			w01 := (1.0 - dx) * dy * getSimWeight(getNeighCharIdx(x0, y1))
+			w11 := dx * dy * getSimWeight(getNeighCharIdx(x1, y1))
+
+			// Apply edge-guided direction flags
+			closestX := x0
+			if dx >= 0.5 {
+				closestX = x1
+			}
+			closestY := y0
+			if dy >= 0.5 {
+				closestY = y1
+			}
+			edgeFlag := edgeFlags[closestY*int(colorWidth)+closestX]
+
+			if edgeFlag == 1 { // Vertical Edge (separating left and right)
+				leftChar := getNeighCharIdx(x0, closestY)
+				rightChar := getNeighCharIdx(x1, closestY)
+				if absDiff(charIdx, leftChar) < absDiff(charIdx, rightChar) {
+					w10 *= 0.05
+					w11 *= 0.05
+				} else {
+					w00 *= 0.05
+					w01 *= 0.05
+				}
+			} else if edgeFlag == 2 { // Horizontal Edge (separating top and bottom)
+				topChar := getNeighCharIdx(closestX, y0)
+				bottomChar := getNeighCharIdx(closestX, y1)
+				if absDiff(charIdx, topChar) < absDiff(charIdx, bottomChar) {
+					w01 *= 0.05
+					w11 *= 0.05
+				} else {
+					w00 *= 0.05
+					w10 *= 0.05
+				}
+			}
+
+			wSum := w00 + w10 + w01 + w11
+
+			var r, g, b uint8
+			if wSum > 0.01 {
+				r = uint8(math.Round((float64(c00.R)*w00 + float64(c10.R)*w10 + float64(c01.R)*w01 + float64(c11.R)*w11) / wSum))
+				g = uint8(math.Round((float64(c00.G)*w00 + float64(c10.G)*w10 + float64(c01.G)*w01 + float64(c11.G)*w11) / wSum))
+				b = uint8(math.Round((float64(c00.B)*w00 + float64(c10.B)*w10 + float64(c01.B)*w01 + float64(c11.B)*w11) / wSum))
+			} else {
+				// Fallback to standard bilinear
+				r = uint8(math.Round((1.0-dx)*(1.0-dy)*float64(c00.R) + dx*(1.0-dy)*float64(c10.R) + (1.0-dx)*dy*float64(c01.R) + dx*dy*float64(c11.R)))
+				g = uint8(math.Round((1.0-dx)*(1.0-dy)*float64(c00.G) + dx*(1.0-dy)*float64(c10.G) + (1.0-dx)*dy*float64(c01.G) + dx*dy*float64(c11.G)))
+				b = uint8(math.Round((1.0-dx)*(1.0-dy)*float64(c00.B) + dx*(1.0-dy)*float64(c10.B) + (1.0-dx)*dy*float64(c11.B)))
+			}
 
 			cells[y*int(width)+x] = Cell{
 				Char: char,
@@ -291,4 +438,22 @@ func getPaletteIndex(char rune) byte {
 
 func interpolateColors(c00, c10, c01, c11, dx, dy float64) float64 {
 	return (1-dx)*(1-dy)*c00 + dx*(1-dy)*c10 + (1-dx)*dy*c01 + dx*dy*c11
+}
+
+func clamp(val float64) float64 {
+	if val < 0.0 {
+		return 0.0
+	}
+	if val > 255.0 {
+		return 255.0
+	}
+	return val
+}
+
+func absDiff(a, b byte) int {
+	diff := int(a) - int(b)
+	if diff < 0 {
+		return -diff
+	}
+	return diff
 }
