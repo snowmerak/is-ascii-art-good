@@ -14,7 +14,7 @@ import (
 // Magic header bytes for .gac files.
 const Magic = "GASC"
 
-// SaveGAC writes the Art to a file using 256-color palette quantization and Zstd compression.
+// SaveGAC writes the Art to a file using 256-color palette quantization, RLE, and Zstd compression.
 func SaveGAC(art *Art, path string) error {
 	file, err := os.Create(path)
 	if err != nil {
@@ -22,7 +22,7 @@ func SaveGAC(art *Art, path string) error {
 	}
 	defer file.Close()
 
-	// 1. Run color quantization
+	// 1. Run color quantization (with Floyd-Steinberg dithering)
 	palette, indices := Quantize(art)
 	paletteSize := len(palette)
 
@@ -66,9 +66,12 @@ func SaveGAC(art *Art, path string) error {
 		return fmt.Errorf("failed to write palette to zstd: %w", err)
 	}
 
-	// Write index grid: Width * Height bytes
-	if _, err := zw.Write(indices); err != nil {
-		return fmt.Errorf("failed to write indices to zstd: %w", err)
+	// 2. RLE encode index grid
+	rleIndices := EncodeRLE(indices)
+
+	// Write RLE indices
+	if _, err := zw.Write(rleIndices); err != nil {
+		return fmt.Errorf("failed to write RLE indices to zstd: %w", err)
 	}
 
 	return nil
@@ -131,11 +134,21 @@ func LoadGAC(path string) (*Art, error) {
 		}
 	}
 
-	// Read index grid
+	// Read RLE indices (remaining stream data)
+	rleIndices, err := io.ReadAll(zr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read RLE data from zstd: %w", err)
+	}
+
+	// Decode RLE
+	indices, err := DecodeRLE(rleIndices)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode RLE indices: %w", err)
+	}
+
 	gridSize := int(width * height)
-	indices := make([]byte, gridSize)
-	if _, err := io.ReadFull(zr, indices); err != nil {
-		return nil, fmt.Errorf("failed to read indices from zstd: %w", err)
+	if len(indices) != gridSize {
+		return nil, fmt.Errorf("RLE decoded size mismatch: expected %d, got %d", gridSize, len(indices))
 	}
 
 	// Reconstruct cells

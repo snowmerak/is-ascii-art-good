@@ -6,37 +6,37 @@ tasks:
   compress:
     desc: Compress image to GAC with default terminal width (100)
     cmds:
-      - go run . compress 'data/1234 (5).png' data/1234.gac 100
+      - go run . compress 'data/144356289_p0_master1200.jpg' data/image.gac 100
 
   compress-highres:
     desc: Compress image to GAC preserving original 1:1 resolution
     cmds:
-      - go run . compress 'data/1234 (5).png' data/1234_highres.gac orig
+      - go run . compress 'data/144356289_p0_master1200.jpg' data/image_highres.gac orig
 
   view:
     desc: View compressed GAC file in terminal with ANSI colors
     cmds:
-      - go run . view data/1234.gac
+      - go run . view data/image.gac
 
   export-pixel:
     desc: Reconstruct GAC back to low-resolution PNG preserving aspect ratio
     cmds:
-      - go run . export data/1234.gac data/1234_pixel.png pixel
+      - go run . export data/image.gac data/image_pixel.png pixel
 
   export-render:
     desc: Reconstruct GAC to high-resolution ASCII glyph PNG preserving aspect ratio
     cmds:
-      - go run . export data/1234.gac data/1234_render.png render
+      - go run . export data/image.gac data/image_render.png render
 
   export-highres-pixel:
     desc: Reconstruct high-resolution GAC back to pixel PNG at original size
     cmds:
-      - go run . export data/1234_highres.gac data/1234_highres_pixel.png pixel
+      - go run . export data/image_highres.gac data/image_highres_pixel.png pixel
 
   export-highres-render:
     desc: Reconstruct high-resolution GAC to massive ASCII glyph PNG
     cmds:
-      - go run . export data/1234_highres.gac data/1234_highres_render.png render
+      - go run . export data/image_highres.gac data/image_highres_render.png render
 
   test:
     desc: Run standard compression, terminal view, and pixel/render exports
