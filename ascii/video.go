@@ -198,10 +198,28 @@ func PlayVideo(path string) error {
 				}
 			}
 
-			// Read changed colors
-			changedColors := make([]byte, numChangedColors)
-			if _, err := io.ReadFull(buf, changedColors); err != nil {
-				return fmt.Errorf("failed to read changed colors in P-frame %d: %w", f, err)
+			// Read changed colors (packed 4-bit if paletteSize <= 16)
+			var changedColors []byte
+			if paletteSize <= 16 {
+				packedColorSize := (numChangedColors + 1) / 2
+				packedColors := make([]byte, packedColorSize)
+				if _, err := io.ReadFull(buf, packedColors); err != nil {
+					return fmt.Errorf("failed to read packed changed colors in P-frame %d: %w", f, err)
+				}
+				changedColors = make([]byte, numChangedColors)
+				for i := 0; i < numChangedColors; i++ {
+					b := packedColors[i/2]
+					if i%2 == 0 {
+						changedColors[i] = b >> 4
+					} else {
+						changedColors[i] = b & 0x0F
+					}
+				}
+			} else {
+				changedColors = make([]byte, numChangedColors)
+				if _, err := io.ReadFull(buf, changedColors); err != nil {
+					return fmt.Errorf("failed to read changed colors in P-frame %d: %w", f, err)
+				}
 			}
 
 			changedColIdx := 0
@@ -644,7 +662,22 @@ func CompressVideo(framesDir, outputPath string, targetWidth int, fps int, color
 				}
 			}
 			rawBuf.Write(colorMask)
-			rawBuf.Write(changedColors)
+
+			// Write changed colors (packed 4-bit if paletteSize <= 16)
+			if paletteSize <= 16 {
+				packed := make([]byte, (len(changedColors)+1)/2)
+				for i := 0; i < len(changedColors); i += 2 {
+					val1 := changedColors[i]
+					var val2 byte = 0
+					if i+1 < len(changedColors) {
+						val2 = changedColors[i+1]
+					}
+					packed[i/2] = (val1 << 4) | (val2 & 0x0F)
+				}
+				rawBuf.Write(packed)
+			} else {
+				rawBuf.Write(changedColors)
+			}
 
 			// Compress payload
 			framePayload = zw.EncodeAll(rawBuf.Bytes(), nil)
@@ -838,9 +871,28 @@ func ExportVideo(inputPath, outputDir, mode string) error {
 				}
 			}
 
-			changedColors := make([]byte, numChangedColors)
-			if _, err := io.ReadFull(buf, changedColors); err != nil {
-				return fmt.Errorf("failed to read changed colors in P-frame %d: %w", f, err)
+			// Read changed colors (packed 4-bit if paletteSize <= 16)
+			var changedColors []byte
+			if paletteSize <= 16 {
+				packedColorSize := (numChangedColors + 1) / 2
+				packedColors := make([]byte, packedColorSize)
+				if _, err := io.ReadFull(buf, packedColors); err != nil {
+					return fmt.Errorf("failed to read packed changed colors in P-frame %d: %w", f, err)
+				}
+				changedColors = make([]byte, numChangedColors)
+				for i := 0; i < numChangedColors; i++ {
+					b := packedColors[i/2]
+					if i%2 == 0 {
+						changedColors[i] = b >> 4
+					} else {
+						changedColors[i] = b & 0x0F
+					}
+				}
+			} else {
+				changedColors = make([]byte, numChangedColors)
+				if _, err := io.ReadFull(buf, changedColors); err != nil {
+					return fmt.Errorf("failed to read changed colors in P-frame %d: %w", f, err)
+				}
 			}
 
 			changedColIdx := 0
@@ -1320,7 +1372,7 @@ func StreamEncodeVideo(in io.Reader, out io.Writer, targetWidth int, fps int, co
 				return fmt.Errorf("failed to write I-frame %d: %w", f, err)
 			}
 		} else {
-			if err := writePFrame(out, zw, width, height, colorWidth, colorHeight, charGrid, prevCharGrid, colorIndices, prevColorIndices); err != nil {
+			if err := writePFrame(out, zw, width, height, colorWidth, colorHeight, uint32(paletteSize), charGrid, prevCharGrid, colorIndices, prevColorIndices); err != nil {
 				return fmt.Errorf("failed to write P-frame %d: %w", f, err)
 			}
 		}
@@ -1380,7 +1432,7 @@ func writeIFrame(out io.Writer, zw *zstd.Encoder, width, height uint32, charGrid
 	return nil
 }
 
-func writePFrame(out io.Writer, zw *zstd.Encoder, width, height, colorWidth, colorHeight uint32, charGrid, prevCharGrid, colorIndices, prevColorIndices []byte) error {
+func writePFrame(out io.Writer, zw *zstd.Encoder, width, height, colorWidth, colorHeight, paletteSize uint32, charGrid, prevCharGrid, colorIndices, prevColorIndices []byte) error {
 	var rawBuf bytes.Buffer
 
 	charMask := make([]byte, (int(width*height)+7)/8)
@@ -1417,7 +1469,22 @@ func writePFrame(out io.Writer, zw *zstd.Encoder, width, height, colorWidth, col
 		}
 	}
 	rawBuf.Write(colorMask)
-	rawBuf.Write(changedColors)
+
+	// Write changed colors (packed 4-bit if paletteSize <= 16)
+	if paletteSize <= 16 {
+		packed := make([]byte, (len(changedColors)+1)/2)
+		for i := 0; i < len(changedColors); i += 2 {
+			val1 := changedColors[i]
+			var val2 byte = 0
+			if i+1 < len(changedColors) {
+				val2 = changedColors[i+1]
+			}
+			packed[i/2] = (val1 << 4) | (val2 & 0x0F)
+		}
+		rawBuf.Write(packed)
+	} else {
+		rawBuf.Write(changedColors)
+	}
 
 	payload := zw.EncodeAll(rawBuf.Bytes(), nil)
 
@@ -1597,9 +1664,28 @@ func StreamDecodeVideo(in io.Reader) error {
 				}
 			}
 
-			changedColors := make([]byte, numChangedColors)
-			if _, err := io.ReadFull(buf, changedColors); err != nil {
-				return fmt.Errorf("failed to read changed colors in P-frame %d: %w", f, err)
+			// Read changed colors (packed 4-bit if paletteSize <= 16)
+			var changedColors []byte
+			if paletteSize <= 16 {
+				packedColorSize := (numChangedColors + 1) / 2
+				packedColors := make([]byte, packedColorSize)
+				if _, err := io.ReadFull(buf, packedColors); err != nil {
+					return fmt.Errorf("failed to read packed changed colors in P-frame %d: %w", f, err)
+				}
+				changedColors = make([]byte, numChangedColors)
+				for i := 0; i < numChangedColors; i++ {
+					b := packedColors[i/2]
+					if i%2 == 0 {
+						changedColors[i] = b >> 4
+					} else {
+						changedColors[i] = b & 0x0F
+					}
+				}
+			} else {
+				changedColors = make([]byte, numChangedColors)
+				if _, err := io.ReadFull(buf, changedColors); err != nil {
+					return fmt.Errorf("failed to read changed colors in P-frame %d: %w", f, err)
+				}
 			}
 
 			changedColIdx := 0
