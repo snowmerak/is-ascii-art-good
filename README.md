@@ -14,6 +14,9 @@ By combining hybrid resolution (high-resolution character luminance + low/full-r
 - **Delta-Compressed Video (`.gav` Format)**:
   - Global color palette generation across frames to eliminate color flickering.
   - **1-bit Change Mask P-Frame (Delta Frame)** technology to avoid redundant data transmission for static regions.
+  - **ASCII Character Grid RLE (I-Frame)**: Compresses redundant background characters in keyframes using run-length encoding.
+  - **Compact Color Index Packing**: Dynamically packs changed color indices to 4 bits in P-frames if the unique palette size is under 16.
+  - **Global Motion Compensation (GMC)**: Detects frame-level shift within a `[-2, 2]x[-2, 2]` search window to compute predictive delta frames, minimizing residual payloads.
   - Achieves **>99.9% compression ratio** (against raw pixel bytes) for typical animations.
 - **Real-Time Video Streaming (Stdin/Stdout Pipelines)**:
   - Live PNG/JPEG stream parser that splits frames from `stdin`.
