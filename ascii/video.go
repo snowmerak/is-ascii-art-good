@@ -142,6 +142,23 @@ func PlayVideo(path string) error {
 			copy(colorIndices, decodedColors)
 
 		} else { // P-Frame
+			// Read shift byte
+			shiftByte, err := buf.ReadByte()
+			if err != nil {
+				return fmt.Errorf("failed to read shift byte in P-frame %d: %w", f, err)
+			}
+			gx := int(shiftByte>>4) - 2
+			gy := int(shiftByte&0x0F) - 2
+
+			if gx != 0 || gy != 0 {
+				charGrid = shiftGrid(charGrid, int(width), int(height), gx, gy, 0)
+				colorScale := int(width / colorWidth)
+				if colorScale < 1 {
+					colorScale = 1
+				}
+				colorIndices = shiftGrid(colorIndices, int(colorWidth), int(colorHeight), gx/colorScale, gy/colorScale, 0)
+			}
+
 			// Read char mask
 			charMaskSize := (int(width*height) + 7) / 8
 			charMask := make([]byte, charMaskSize)
@@ -625,11 +642,48 @@ func CompressVideo(framesDir, outputPath string, targetWidth int, fps int, color
 
 			var rawBuf bytes.Buffer
 
-			// Calculate character difference mask and changes
+			// Search for global motion vector
+			bestDx, bestDy := 0, 0
+			maxMatches := -1
+			for dy := -2; dy <= 2; dy++ {
+				for dx := -2; dx <= 2; dx++ {
+					matches := 0
+					for y := 0; y < int(height); y++ {
+						for x := 0; x < int(width); x++ {
+							srcX := x - dx
+							srcY := y - dy
+							if srcX >= 0 && srcX < int(width) && srcY >= 0 && srcY < int(height) {
+								if charGrid[y*int(width)+x] == prevCharGrid[srcY*int(width)+srcX] {
+									matches++
+								}
+							} else {
+								if charGrid[y*int(width)+x] == 0 {
+									matches++
+								}
+							}
+						}
+					}
+					if matches > maxMatches {
+						maxMatches = matches
+						bestDx = dx
+						bestDy = dy
+					}
+				}
+			}
+
+			// Write shift byte
+			shiftByte := byte((bestDx+2)<<4 | (bestDy+2))
+			rawBuf.WriteByte(shiftByte)
+
+			// Predict charGrid and colorIndices
+			predCharGrid := shiftGrid(prevCharGrid, int(width), int(height), bestDx, bestDy, 0)
+			predColorIndices := shiftGrid(prevColorIndices, int(colorWidth), int(colorHeight), bestDx/int(colorScale), bestDy/int(colorScale), 0)
+
+			// Calculate character difference mask and changes relative to prediction
 			charMask := make([]byte, (int(width*height)+7)/8)
 			var changedChars []byte
 			for i := 0; i < int(width*height); i++ {
-				if charGrid[i] != prevCharGrid[i] {
+				if charGrid[i] != predCharGrid[i] {
 					byteIdx := i / 8
 					bitIdx := i % 8
 					charMask[byteIdx] |= (1 << bitIdx)
@@ -650,11 +704,11 @@ func CompressVideo(framesDir, outputPath string, targetWidth int, fps int, color
 			}
 			rawBuf.Write(packedChanged)
 
-			// Calculate color difference mask and changes
+			// Calculate color difference mask and changes relative to prediction
 			colorMask := make([]byte, (int(colorWidth*colorHeight)+7)/8)
 			var changedColors []byte
 			for i := 0; i < int(colorWidth*colorHeight); i++ {
-				if colorIndices[i] != prevColorIndices[i] {
+				if colorIndices[i] != predColorIndices[i] {
 					byteIdx := i / 8
 					bitIdx := i % 8
 					colorMask[byteIdx] |= (1 << bitIdx)
@@ -816,6 +870,23 @@ func ExportVideo(inputPath, outputDir, mode string) error {
 			copy(colorIndices, decodedColors)
 
 		} else { // P-Frame
+			// Read shift byte
+			shiftByte, err := buf.ReadByte()
+			if err != nil {
+				return fmt.Errorf("failed to read shift byte in P-frame %d: %w", f, err)
+			}
+			gx := int(shiftByte>>4) - 2
+			gy := int(shiftByte&0x0F) - 2
+
+			if gx != 0 || gy != 0 {
+				charGrid = shiftGrid(charGrid, int(width), int(height), gx, gy, 0)
+				colorScale := int(width / colorWidth)
+				if colorScale < 1 {
+					colorScale = 1
+				}
+				colorIndices = shiftGrid(colorIndices, int(colorWidth), int(colorHeight), gx/colorScale, gy/colorScale, 0)
+			}
+
 			// Read char mask
 			charMaskSize := (int(width*height) + 7) / 8
 			charMask := make([]byte, charMaskSize)
@@ -1435,10 +1506,53 @@ func writeIFrame(out io.Writer, zw *zstd.Encoder, width, height uint32, charGrid
 func writePFrame(out io.Writer, zw *zstd.Encoder, width, height, colorWidth, colorHeight, paletteSize uint32, charGrid, prevCharGrid, colorIndices, prevColorIndices []byte) error {
 	var rawBuf bytes.Buffer
 
+	// Search for global motion vector
+	bestDx, bestDy := 0, 0
+	maxMatches := -1
+	for dy := -2; dy <= 2; dy++ {
+		for dx := -2; dx <= 2; dx++ {
+			matches := 0
+			for y := 0; y < int(height); y++ {
+				for x := 0; x < int(width); x++ {
+					srcX := x - dx
+					srcY := y - dy
+					if srcX >= 0 && srcX < int(width) && srcY >= 0 && srcY < int(height) {
+						if charGrid[y*int(width)+x] == prevCharGrid[srcY*int(width)+srcX] {
+							matches++
+						}
+					} else {
+						if charGrid[y*int(width)+x] == 0 {
+							matches++
+						}
+					}
+				}
+			}
+			if matches > maxMatches {
+				maxMatches = matches
+				bestDx = dx
+				bestDy = dy
+			}
+		}
+	}
+
+	// Write shift byte
+	shiftByte := byte((bestDx+2)<<4 | (bestDy+2))
+	rawBuf.WriteByte(shiftByte)
+
+	colorScale := int(width / colorWidth)
+	if colorScale < 1 {
+		colorScale = 1
+	}
+
+	// Predict charGrid and colorIndices
+	predCharGrid := shiftGrid(prevCharGrid, int(width), int(height), bestDx, bestDy, 0)
+	predColorIndices := shiftGrid(prevColorIndices, int(colorWidth), int(colorHeight), bestDx/colorScale, bestDy/colorScale, 0)
+
+	// Calculate character difference mask and changes relative to prediction
 	charMask := make([]byte, (int(width*height)+7)/8)
 	var changedChars []byte
 	for i := 0; i < int(width*height); i++ {
-		if charGrid[i] != prevCharGrid[i] {
+		if charGrid[i] != predCharGrid[i] {
 			byteIdx := i / 8
 			bitIdx := i % 8
 			charMask[byteIdx] |= (1 << bitIdx)
@@ -1461,7 +1575,7 @@ func writePFrame(out io.Writer, zw *zstd.Encoder, width, height, colorWidth, col
 	colorMask := make([]byte, (int(colorWidth*colorHeight)+7)/8)
 	var changedColors []byte
 	for i := 0; i < int(colorWidth*colorHeight); i++ {
-		if colorIndices[i] != prevColorIndices[i] {
+		if colorIndices[i] != predColorIndices[i] {
 			byteIdx := i / 8
 			bitIdx := i % 8
 			colorMask[byteIdx] |= (1 << bitIdx)
@@ -1611,6 +1725,24 @@ func StreamDecodeVideo(in io.Reader) error {
 			copy(colorIndices, decodedColors)
 
 		} else {
+			// Read shift byte
+			shiftByte, err := buf.ReadByte()
+			if err != nil {
+				return fmt.Errorf("failed to read shift byte in P-frame %d: %w", f, err)
+			}
+			gx := int(shiftByte>>4) - 2
+			gy := int(shiftByte&0x0F) - 2
+
+			if gx != 0 || gy != 0 {
+				charGrid = shiftGrid(charGrid, int(width), int(height), gx, gy, 0)
+				colorScale := int(width / colorWidth)
+				if colorScale < 1 {
+					colorScale = 1
+				}
+				colorIndices = shiftGrid(colorIndices, int(colorWidth), int(colorHeight), gx/colorScale, gy/colorScale, 0)
+			}
+
+			// Read char mask
 			charMaskSize := (int(width*height) + 7) / 8
 			charMask := make([]byte, charMaskSize)
 			if _, err := io.ReadFull(buf, charMask); err != nil {
@@ -1878,4 +2010,20 @@ func StreamDecodeVideo(in io.Reader) error {
 	}
 
 	return nil
+}
+
+func shiftGrid(grid []byte, width, height int, dx, dy int, defaultVal byte) []byte {
+	shifted := make([]byte, width*height)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			srcX := x - dx
+			srcY := y - dy
+			if srcX >= 0 && srcX < width && srcY >= 0 && srcY < height {
+				shifted[y*width+x] = grid[srcY*width+srcX]
+			} else {
+				shifted[y*width+x] = defaultVal
+			}
+		}
+	}
+	return shifted
 }
