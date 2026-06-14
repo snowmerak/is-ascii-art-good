@@ -116,20 +116,19 @@ func PlayVideo(path string) error {
 		buf := bytes.NewReader(decompressed)
 
 		if frameType == 0 { // I-Frame
-			// Unpack characters
-			packedCharSize := (int(width*height) + 1) / 2
-			packedChars := make([]byte, packedCharSize)
-			if _, err := io.ReadFull(buf, packedChars); err != nil {
-				return fmt.Errorf("failed to read packed chars in I-frame %d: %w", f, err)
+			var rleCharsLen uint32
+			if err := binary.Read(buf, binary.BigEndian, &rleCharsLen); err != nil {
+				return fmt.Errorf("failed to read rle chars len in I-frame %d: %w", f, err)
 			}
-			for i := 0; i < int(width*height); i++ {
-				b := packedChars[i/2]
-				if i%2 == 0 {
-					charGrid[i] = b >> 4
-				} else {
-					charGrid[i] = b & 0x0F
-				}
+			rleChars := make([]byte, rleCharsLen)
+			if _, err := io.ReadFull(buf, rleChars); err != nil {
+				return fmt.Errorf("failed to read rle chars in I-frame %d: %w", f, err)
 			}
+			decodedChars, err := DecodeRLE(rleChars)
+			if err != nil {
+				return fmt.Errorf("failed to decode RLE chars in I-frame %d: %w", f, err)
+			}
+			copy(charGrid, decodedChars)
 
 			// Read RLE color indices
 			rleColors := make([]byte, buf.Len())
@@ -589,18 +588,12 @@ func CompressVideo(framesDir, outputPath string, targetWidth int, fps int, color
 
 			var rawBuf bytes.Buffer
 
-			// Pack chars
-			packedCharSize := (int(width*height) + 1) / 2
-			packedChars := make([]byte, packedCharSize)
-			for i := 0; i < int(width*height); i += 2 {
-				val1 := charGrid[i]
-				var val2 byte = 0
-				if i+1 < int(width*height) {
-					val2 = charGrid[i+1]
-				}
-				packedChars[i/2] = (val1 << 4) | (val2 & 0x0F)
+			// RLE chars
+			rleChars := EncodeRLE(charGrid)
+			if err := binary.Write(&rawBuf, binary.BigEndian, uint32(len(rleChars))); err != nil {
+				return fmt.Errorf("failed to write rle chars len: %w", err)
 			}
-			rawBuf.Write(packedChars)
+			rawBuf.Write(rleChars)
 
 			// RLE color indices
 			rleColors := EncodeRLE(colorIndices)
@@ -764,20 +757,21 @@ func ExportVideo(inputPath, outputDir, mode string) error {
 		buf := bytes.NewReader(decompressed)
 
 		if frameType == 0 { // I-Frame
-			packedCharSize := (int(width*height) + 1) / 2
-			packedChars := make([]byte, packedCharSize)
-			if _, err := io.ReadFull(buf, packedChars); err != nil {
-				return fmt.Errorf("failed to read packed chars in I-frame %d: %w", f, err)
+			var rleCharsLen uint32
+			if err := binary.Read(buf, binary.BigEndian, &rleCharsLen); err != nil {
+				return fmt.Errorf("failed to read rle chars len in I-frame %d: %w", f, err)
 			}
-			for i := 0; i < int(width*height); i++ {
-				b := packedChars[i/2]
-				if i%2 == 0 {
-					charGrid[i] = b >> 4
-				} else {
-					charGrid[i] = b & 0x0F
-				}
+			rleChars := make([]byte, rleCharsLen)
+			if _, err := io.ReadFull(buf, rleChars); err != nil {
+				return fmt.Errorf("failed to read rle chars in I-frame %d: %w", f, err)
 			}
+			decodedChars, err := DecodeRLE(rleChars)
+			if err != nil {
+				return fmt.Errorf("failed to decode RLE chars in I-frame %d: %w", f, err)
+			}
+			copy(charGrid, decodedChars)
 
+			// Read RLE color indices
 			rleColors := make([]byte, buf.Len())
 			if _, err := io.ReadFull(buf, rleColors); err != nil {
 				return fmt.Errorf("failed to read RLE colors in I-frame %d: %w", f, err)
@@ -789,6 +783,7 @@ func ExportVideo(inputPath, outputDir, mode string) error {
 			copy(colorIndices, decodedColors)
 
 		} else { // P-Frame
+			// Read char mask
 			charMaskSize := (int(width*height) + 7) / 8
 			charMask := make([]byte, charMaskSize)
 			if _, err := io.ReadFull(buf, charMask); err != nil {
@@ -804,6 +799,7 @@ func ExportVideo(inputPath, outputDir, mode string) error {
 				}
 			}
 
+			// Read packed changed characters
 			packedChangedCharSize := (numChangedChars + 1) / 2
 			packedChanged := make([]byte, packedChangedCharSize)
 			if _, err := io.ReadFull(buf, packedChanged); err != nil {
@@ -1356,17 +1352,11 @@ func findClosestColor(c color.RGBA, palette []color.RGBA) int {
 func writeIFrame(out io.Writer, zw *zstd.Encoder, width, height uint32, charGrid, colorIndices []byte) error {
 	var rawBuf bytes.Buffer
 
-	packedCharSize := (int(width*height) + 1) / 2
-	packedChars := make([]byte, packedCharSize)
-	for i := 0; i < int(width*height); i += 2 {
-		val1 := charGrid[i]
-		var val2 byte = 0
-		if i+1 < int(width*height) {
-			val2 = charGrid[i+1]
-		}
-		packedChars[i/2] = (val1 << 4) | (val2 & 0x0F)
+	rleChars := EncodeRLE(charGrid)
+	if err := binary.Write(&rawBuf, binary.BigEndian, uint32(len(rleChars))); err != nil {
+		return err
 	}
-	rawBuf.Write(packedChars)
+	rawBuf.Write(rleChars)
 
 	rleColors := EncodeRLE(colorIndices)
 	rawBuf.Write(rleColors)
@@ -1529,19 +1519,19 @@ func StreamDecodeVideo(in io.Reader) error {
 		buf := bytes.NewReader(decompressed)
 
 		if frameType == 0 {
-			packedCharSize := (int(width*height) + 1) / 2
-			packedChars := make([]byte, packedCharSize)
-			if _, err := io.ReadFull(buf, packedChars); err != nil {
-				return fmt.Errorf("failed to read packed chars in I-frame %d: %w", f, err)
+			var rleCharsLen uint32
+			if err := binary.Read(buf, binary.BigEndian, &rleCharsLen); err != nil {
+				return fmt.Errorf("failed to read rle chars len in I-frame %d: %w", f, err)
 			}
-			for i := 0; i < int(width*height); i++ {
-				b := packedChars[i/2]
-				if i%2 == 0 {
-					charGrid[i] = b >> 4
-				} else {
-					charGrid[i] = b & 0x0F
-				}
+			rleChars := make([]byte, rleCharsLen)
+			if _, err := io.ReadFull(buf, rleChars); err != nil {
+				return fmt.Errorf("failed to read rle chars in I-frame %d: %w", f, err)
 			}
+			decodedChars, err := DecodeRLE(rleChars)
+			if err != nil {
+				return fmt.Errorf("failed to decode RLE chars in I-frame %d: %w", f, err)
+			}
+			copy(charGrid, decodedChars)
 
 			rleColors := make([]byte, buf.Len())
 			if _, err := io.ReadFull(buf, rleColors); err != nil {
